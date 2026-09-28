@@ -1,0 +1,759 @@
+import { useState, useRef, useEffect } from 'react'
+import { LANGUAGES, SAMPLE_PROMPTS, SECTOR_META } from '../constants'
+import { api } from '../api'
+import { useToast } from '../context'
+
+function ConfidenceBar({ value, color = 'var(--accent)' }) {
+  return (
+    <div className="confidence-bar" style={{ marginTop: 6 }}>
+      <div className="confidence-fill" style={{ width: `${Math.round(value * 100)}%`, background: color }} />
+    </div>
+  )
+}
+
+function ExtractionPreview({ data, onConfirm, onCorrect, langCode }) {
+  const [correcting, setCorrecting] = useState(false)
+  const [corrCategory, setCorrCategory] = useState(data.category_id)
+  const [corrDistrict, setCorrDistrict] = useState(data.inferred_district)
+  const [corrUrgency, setCorrUrgency] = useState(data.urgency_level)
+
+  const sectors = Object.entries(SECTOR_META)
+  const lang = LANGUAGES[langCode] || LANGUAGES.en
+
+  return (
+    <div className="extraction-card fade-in">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <h3 style={{ fontSize: 15, fontWeight: 600 }}>🤖 AI Extraction Preview</h3>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <span className="fact-tag">Extracted Fact</span>
+          <span className="inference-tag">AI Inference</span>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div className="extraction-field">
+          <span className="extraction-key">Detected Language <span className="fact-tag">Fact</span></span>
+          <span className="extraction-value" style={{ fontFamily: lang.font }}>
+            {lang.nativeName} ({lang.name}) — {lang.script} script
+          </span>
+          <ConfidenceBar value={data.language_confidence} color="#818cf8" />
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>{Math.round(data.language_confidence * 100)}% confidence · STT quality: {lang.sttQuality}</span>
+          {data.acoustic_warning && <div style={{ marginTop: 6, padding: '6px 10px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 6, fontSize: 11, color: 'var(--warning)' }}>⚠️ {data.acoustic_warning}</div>}
+        </div>
+
+        <div className="extraction-field">
+          <span className="extraction-key">Category <span className="inference-tag">Inference</span></span>
+          {correcting ? (
+            <select className="form-select" value={corrCategory} onChange={e => setCorrCategory(e.target.value)}>
+              {sectors.map(([id, s]) => <option key={id} value={id}>{s.icon} {s.name}</option>)}
+            </select>
+          ) : (
+            <span className="extraction-value">
+              {SECTOR_META[data.category_id]?.icon} {data.extracted_category}
+            </span>
+          )}
+          <ConfidenceBar value={data.category_confidence} />
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>{Math.round(data.category_confidence * 100)}% confidence</span>
+        </div>
+
+        <div className="extraction-field">
+          <span className="extraction-key">Location <span className="inference-tag">Inference</span></span>
+          {correcting ? (
+            <input className="form-input" value={corrDistrict} onChange={e => setCorrDistrict(e.target.value)} placeholder="District name" />
+          ) : (
+            <span className="extraction-value">📍 {data.inferred_district}, {data.inferred_state}</span>
+          )}
+          <ConfidenceBar value={data.inferred_location_confidence} color={data.inferred_location_confidence > 0.85 ? '#10b981' : '#f59e0b'} />
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
+            {Math.round(data.inferred_location_confidence * 100)}% confidence · Extracted: "{data.extracted_location_text}"
+          </span>
+        </div>
+
+        <div className="extraction-field">
+          <span className="extraction-key">Urgency <span className="inference-tag">Inference</span></span>
+          {correcting ? (
+            <select className="form-select" value={corrUrgency} onChange={e => setCorrUrgency(e.target.value)}>
+              {['High', 'Medium', 'Low'].map(u => <option key={u} value={u}>{u}</option>)}
+            </select>
+          ) : (
+            <span className="extraction-value">
+              <span className={`badge badge-${data.urgency_level === 'High' ? 'critical' : data.urgency_level === 'Medium' ? 'moderate' : 'low'}`}>
+                {data.urgency_level}
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 8 }}>{data.urgency_rationale}</span>
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="extraction-field" style={{ marginTop: 12, background: 'var(--bg-card)', borderRadius: 8, padding: 12 }}>
+        <span className="extraction-key">Original Text (preserved for audit) <span className="fact-tag">Source</span></span>
+        <span className="extraction-value" style={{ fontFamily: LANGUAGES[langCode]?.font, fontSize: 15, lineHeight: 1.6 }}>{data.original_text}</span>
+        {langCode !== 'en' && (
+          <>
+            <span className="extraction-key" style={{ marginTop: 10 }}>Translated to English (for backend analysis) <span className="inference-tag">AI Translation</span></span>
+            <span className="extraction-value" style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>{data.translated_text}</span>
+            <ConfidenceBar value={data.translation_confidence} color="#10b981" />
+          </>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+        {!correcting ? (
+          <>
+            <button className="btn btn-primary btn-sm" onClick={() => onConfirm({ corrCategory, corrDistrict, corrUrgency })}>
+              ✅ Confirm & Submit
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setCorrecting(true)}>
+              ✏️ Correct AI Extraction
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="btn btn-primary btn-sm" onClick={() => { setCorrecting(false); onCorrect({ corrCategory, corrDistrict, corrUrgency }) }}>
+              💾 Apply Correction & Submit
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setCorrecting(false)}>Cancel</button>
+          </>
+        )}
+      </div>
+      <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10 }}>
+        Your correction will be logged in the audit trail and used to improve the model. No personal identifiers are stored.
+      </p>
+    </div>
+  )
+}
+
+export default function CitizenInputPage() {
+  const toast = useToast()
+  const [selectedLang, setSelectedLang] = useState('en')
+  const [inputMode, setInputMode] = useState('text') // text | voice | chat
+  const [textInput, setTextInput] = useState('')
+  const [imageData, setImageData] = useState(null)
+  const [imageFile, setImageFile] = useState(null)
+  const [imagePreview, setImagePreview] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [extraction, setExtraction] = useState(null)
+  const [submittedCode, setSubmittedCode] = useState(null)
+  const [recording, setRecording] = useState(false)
+  const [recordTime, setRecordTime] = useState(0)
+  const [chatStep, setChatStep] = useState('category')
+  const [chatCategory, setChatCategory] = useState(null)
+  const [chatDescription, setChatDescription] = useState('')
+  const [chatLocation, setChatLocation] = useState('')
+  const [chatUrgency, setChatUrgency] = useState(null)
+  const [chatMessages, setChatMessages] = useState([
+    { role: 'bot', text: '🙏 Namaste! I am the CitizenConnect assistant. What problem would you like to report? Please choose a category below. (यहाँ हिन्दी में भी लिख सकते हैं / ಕನ್ನಡದಲ್ಲಿ ಬರೆಯಿರಿ)', time: new Date() }
+  ])
+  
+  const timerRef = useRef(null)
+  const chatEndRef = useRef(null)
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatMessages])
+
+  const lang = LANGUAGES[selectedLang]
+
+  const handleImageSelect = (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      toast('Please upload a JPG, PNG, or WebP image', 'error')
+      event.target.value = ''
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast('Image must be 5 MB or smaller', 'error')
+      event.target.value = ''
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      const value = String(reader.result)
+      setImageData(value.split(',')[1] || '')
+      setImageFile(file)
+      setImagePreview(value)
+      setExtraction(null)
+      if (inputMode === 'chat') {
+  setChatStep('review')
+
+  setChatMessages(prev => [
+    ...prev,
+    {
+      role: 'user',
+      text: '📷 Photo added',
+      time: new Date()
+    },
+    {
+      role: 'bot',
+      text: 'Great! Your photo has been added. Please review your report below.',
+      time: new Date()
+    }
+  ])
+}
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const removeImage = () => {
+    setImageData(null)
+    setImageFile(null)
+    setImagePreview('')
+  }
+
+  const handleLangSelect = (code) => {
+    setSelectedLang(code)
+    setTextInput(SAMPLE_PROMPTS[code] || '')
+    setExtraction(null)
+  }
+
+  const handleTextPreview = async () => {
+    if (!textInput.trim()) return toast('Please enter a description', 'error')
+    setLoading(true)
+    try {
+      const res = await api.previewExtraction({ text: textInput, language_override: selectedLang })
+      setExtraction(res.extraction)
+    } catch {
+      toast('Preview failed — is the backend running?', 'error')
+    }
+    setLoading(false)
+  }
+
+  const handleConfirmSubmit = async (corrections = {}, overrideText = null) => {
+    setLoading(true)
+    try {
+      const res = await api.submitRequest({
+        text: overrideText ?? textInput,
+        language_override: selectedLang,
+        image_data: imageData,
+        image_mime_type: imageFile?.type,
+        image_filename: imageFile?.name,
+        channel: inputMode === 'chat' ? 'messaging_chat' : inputMode === 'voice' ? 'voice_audio' : 'web_form'
+      })
+      if (res.flagged && res.spam_score > 0.8) {
+        toast('Submission blocked: ' + res.message, 'error')
+      } else {
+        const hasCorrections = corrections.corrCategory || corrections.corrDistrict || corrections.corrUrgency
+        if (hasCorrections && res.tracking_code) {
+          await api.correctRequest(res.tracking_code, {
+            corrected_category: corrections.corrCategory,
+            corrected_district: corrections.corrDistrict,
+            corrected_urgency: corrections.corrUrgency,
+            correction_reason: 'Citizen correction from extraction review'
+          })
+        }
+        setSubmittedCode(res.tracking_code)
+        setChatStep('category')
+        setChatCategory(null)
+        setChatDescription('')
+        setChatLocation('')
+        setChatUrgency(null)
+        setChatMessages([
+              {
+                role: 'bot',
+                text: '🙏 Namaste! I am the CitizenConnect assistant. What problem would you like to report? Please choose a category below. (यहाँ हिन्दी में भी लिख सकते हैं / ಕನ್ನಡದಲ್ಲಿ ಬರೆಯಿರಿ)',
+                time: new Date()
+              }
+            ])
+        setImageData(null)
+        setImageFile(null)
+        setImagePreview('')
+        toast('Request submitted! Tracking: ' + res.tracking_code, 'success')
+        setExtraction(null)
+      }
+    } catch {
+      toast('Submission failed', 'error')
+    }
+    setLoading(false)
+  }
+
+  const startRecording = () => {
+    setRecording(true)
+    setRecordTime(0)
+    timerRef.current = setInterval(() => setRecordTime(t => t + 1), 1000)
+  }
+  const stopRecording = () => {
+    setRecording(false)
+    clearInterval(timerRef.current)
+    const simulatedTranscript = SAMPLE_PROMPTS[selectedLang] || ''
+    setTextInput(simulatedTranscript)
+    toast('Voice captured! Review the transcript below.', 'success')
+  }
+
+
+
+  if (submittedCode) return (
+    <div className="page">
+      <div style={{ maxWidth: 540, margin: '0 auto', textAlign: 'center', paddingTop: 40 }} className="fade-in">
+        <div style={{ fontSize: 64, marginBottom: 20 }}>✅</div>
+        <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Request Submitted!</h2>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: 24 }}>Your civic demand has been received and is being processed. No personal data has been retained.</p>
+        <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-accent)', borderRadius: 12, padding: 20, marginBottom: 24 }}>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>TRACKING CODE</p>
+          <p style={{ fontSize: 28, fontWeight: 800, color: 'var(--accent)', letterSpacing: 2 }}>{submittedCode}</p>
+          <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>Save this code to track status of your request</p>
+        </div>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+          <button className="btn btn-primary" onClick={() => { setSubmittedCode(null); setTextInput(''); removeImage() }}>Submit Another</button>
+          <button className="btn btn-ghost" onClick={() => { document.querySelector('[data-tab="track"]')?.click() }}>Track Request</button>
+        </div>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="page">
+      <div className="disclaimer-banner">
+        <span className="icon">⚠️</span>
+        <span>This is a <strong>prototype / demo system</strong> using synthetic data. No real government integration. All AI extractions are decision-support only — not final determinations.</span>
+      </div>
+
+      <div style={{ maxWidth: 760, margin: '0 auto' }}>
+        <div className="page-header">
+          <h1 className="page-title">🗣️ Submit a Civic Development Request</h1>
+          <p className="page-subtitle">Voice your development concern in any of 6 languages. AI will extract, translate, and categorize your input — always with human review.</p>
+        </div>
+
+        {/* Language Selector */}
+        <div className="card card-body" style={{ marginBottom: 20 }}>
+          <label className="form-label">🌐 Select Your Language / अपनी भाषा चुनें / ನಿಮ್ಮ ಭಾಷೆ ಆಯ್ಕೆ ಮಾಡಿ</label>
+          <div className="lang-grid">
+            {Object.values(LANGUAGES).map(l => (
+              <button key={l.code} className={`lang-pill ${selectedLang === l.code ? 'active' : ''}`}
+                onClick={() => handleLangSelect(l.code)} id={`lang-${l.code}`}>
+                <span style={{ fontFamily: l.font }} className="lang-native">{l.nativeName}</span>
+                <span style={{ fontSize: 11, color: selectedLang === l.code ? 'var(--accent)' : 'var(--text-muted)' }}>{l.name}</span>
+                <span className={`lang-quality`} style={{ color: l.sttQuality === 'Strong' ? 'var(--success)' : l.sttQuality === 'Good' ? '#3b82f6' : 'var(--warning)' }}>
+                  {l.sttQuality}
+                </span>
+              </button>
+            ))}
+          </div>
+          <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10 }}>STT quality indicators: <span style={{ color: 'var(--success)' }}>Strong</span> / <span style={{ color: '#3b82f6' }}>Good</span> / <span style={{ color: 'var(--warning)' }}>Moderate</span> — Lower confidence inputs will show warnings.</p>
+        </div>
+
+        {/* Input Mode */}
+        <div className="card card-body" style={{ marginBottom: 20 }}>
+          <div className="input-mode-tabs">
+            {[['text', '📝 Text'], ['voice', '🎤 Voice'], ['chat', '💬 Chat (WhatsApp-style)']].map(([m, label]) => (
+              <button key={m} className={`input-mode-tab ${inputMode === m ? 'active' : ''}`} onClick={() => { setInputMode(m); setExtraction(null) }}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="image-upload-panel">
+            <div>
+              <label className="form-label" htmlFor="problem-image">📷 Add a photo of the problem <span style={{ color: 'var(--text-muted)' }}>(optional)</span></label>
+              <p className="image-upload-help">Available in text, voice, and chat mode. JPG, PNG, or WebP up to 5 MB.</p>
+            </div>
+            <input id="problem-image" type="file" accept="image/jpeg,image/png,image/webp" onChange={handleImageSelect} />
+            {imagePreview && (
+              <div className="image-preview-row">
+                <img src={imagePreview} alt="Selected evidence preview" className="image-preview" />
+                <div>
+                  <div className="image-file-name">{imageFile?.name}</div>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={removeImage}>Remove photo</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* TEXT MODE */}
+          {inputMode === 'text' && (
+            <>
+              <div className="form-group">
+                <label className="form-label" style={{ fontFamily: lang.font }}>
+                  {selectedLang === 'en' ? 'Describe your development concern' :
+                   selectedLang === 'hi' ? 'अपनी समस्या यहाँ लिखें' :
+                   selectedLang === 'kn' ? 'ನಿಮ್ಮ ಸಮಸ್ಯೆ ಇಲ್ಲಿ ಬರೆಯಿರಿ' :
+                   selectedLang === 'ta' ? 'உங்கள் பிரச்னையை இங்கே எழுதுங்கள்' :
+                   selectedLang === 'te' ? 'మీ సమస్య ఇక్కడ వ్రాయండి' :
+                   'আপনার সমস্যা এখানে লিখুন'}
+                </label>
+                <textarea
+                  className="form-textarea"
+                  style={{ fontFamily: lang.font, fontSize: 15, minHeight: 120, direction: lang.dir }}
+                  value={textInput}
+                  onChange={e => { setTextInput(e.target.value); setExtraction(null) }}
+                  placeholder={SAMPLE_PROMPTS[selectedLang]}
+                  id="text-input-area"
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-primary" onClick={handleTextPreview} disabled={loading || !textInput.trim()} id="btn-preview">
+                  {loading ? '⏳ Analyzing…' : '🔍 Preview AI Extraction'}
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setTextInput(SAMPLE_PROMPTS[selectedLang])}>
+                  Try Sample
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* VOICE MODE */}
+          {inputMode === 'voice' && (
+            <div className="voice-recorder">
+              <button className={`record-btn ${recording ? 'recording' : ''}`}
+                onClick={recording ? stopRecording : startRecording} id="btn-record">
+                {recording ? '⏹' : '🎤'}
+              </button>
+              {recording && (
+                <>
+                  <div className="waveform">
+                    {[16, 26, 34, 22, 30, 18, 28, 20].map((height, index) => <div key={index} className="waveform-bar" style={{ height: `${height}px` }} />)}
+                  </div>
+                  <p style={{ color: 'var(--danger)', fontSize: 13 }}>Recording… {recordTime}s — Tap to stop</p>
+                </>
+              )}
+              {!recording && <p style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center' }}>
+                {textInput ? '✅ Transcript ready — review below' : `Tap the mic to record in ${lang.nativeName}.\nSpeak clearly about your development concern.`}
+              </p>}
+              {textInput && (
+                <>
+                  <textarea className="form-textarea" value={textInput} onChange={e => setTextInput(e.target.value)}
+                    style={{ fontFamily: lang.font, fontSize: 14, width: '100%' }} />
+                  <button className="btn btn-primary" onClick={handleTextPreview} disabled={loading} id="btn-voice-preview">
+                    {loading ? '⏳ Analyzing…' : '🔍 Preview Extraction'}
+                  </button>
+                </>
+              )}
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center' }}>
+                Note: Voice capture in this prototype is simulated. In production, this integrates with Whisper/Azure/IndicSTT per language.
+              </p>
+            </div>
+          )}
+
+          {/* CHAT MODE */}
+          {inputMode === 'chat' && (
+            <>
+                <div className="chat-container">
+
+                  {chatStep === 'category' && (
+                    <div className="chat-category-section">
+                      <div className="chat-category-title">
+                        What problem would you like to report?
+                      </div>
+
+                      <div className="chat-category-grid">
+                        {Object.entries(SECTOR_META).map(([key, sector]) => (
+                          <button
+                            key={key}
+                            className="chat-category-button"
+                            onClick={() => {
+                              setChatCategory(key)
+                              setChatStep('description')
+
+                              setChatMessages(prev => [
+                                ...prev,
+                                {
+                                  role: 'user',
+                                  text: sector.name,
+                                  time: new Date()
+                                },
+                                {
+                                  role: 'bot',
+                                  text: 'Got it! Please describe the problem in a few words.',
+                                  time: new Date()
+                                }
+                              ])
+                            }}
+                          >
+                            <span className="chat-category-icon">{sector.icon}</span>
+                            <span>{sector.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="chat-messages" id="chat-messages">
+                                  {chatMessages.map((m, i) => (
+                                    <div key={i} className={`chat-bubble ${m.role}`}>
+                                      <div style={{ fontFamily: m.role === 'user' ? lang.font : 'inherit', whiteSpace: 'pre-line' }}>{m.text}</div>
+                                      <div className="meta">{m.time.toLocaleTimeString()}</div>
+                                    </div>
+                                  ))}
+                                  <div ref={chatEndRef} />
+                                </div>
+                                {chatStep === 'description' && (
+  <div className="chat-input-row">
+    <input
+      className="chat-input"
+      value={chatDescription}
+      onChange={e => setChatDescription(e.target.value)}
+      placeholder="Describe the problem..."
+      style={{ fontFamily: lang.font, direction: lang.dir }}
+      onKeyDown={e => {
+        if (e.key === 'Enter' && chatDescription.trim()) {
+          setChatStep('location')
+
+          setChatMessages(prev => [
+            ...prev,
+            {
+              role: 'user',
+              text: chatDescription,
+              time: new Date()
+            },
+            {
+              role: 'bot',
+              text: 'Thank you. Where is this problem located? Please enter the village, town, area, or district.',
+              time: new Date()
+            }
+          ])
+        }
+      }}
+    />
+
+    <button
+      className="btn btn-primary btn-sm"
+      onClick={() => {
+        if (!chatDescription.trim()) return
+
+        setChatStep('location')
+
+        setChatMessages(prev => [
+          ...prev,
+          {
+            role: 'user',
+            text: chatDescription,
+            time: new Date()
+          },
+          {
+            role: 'bot',
+            text: 'Thank you. Where is this problem located? Please enter the village, town, area, or district.',
+            time: new Date()
+          }
+        ])
+      }}
+    >
+      Send
+    </button>
+  </div>
+)}
+   {chatStep === 'location' && (
+  <div className="chat-input-row">
+    <input
+      className="chat-input"
+      value={chatLocation}
+      onChange={e => setChatLocation(e.target.value)}
+      placeholder="Enter village, town, area, or district..."
+      style={{ fontFamily: lang.font, direction: lang.dir }}
+      onKeyDown={e => {
+        if (e.key === 'Enter' && chatLocation.trim()) {
+          setChatStep('urgency')
+
+          setChatMessages(prev => [
+            ...prev,
+            {
+              role: 'user',
+              text: chatLocation,
+              time: new Date()
+            },
+            {
+              role: 'bot',
+              text: 'How urgent is this problem?',
+              time: new Date()
+            }
+          ])
+        }
+      }}
+    />
+
+    <button
+      className="btn btn-primary btn-sm"
+      onClick={() => {
+        if (!chatLocation.trim()) return
+
+        setChatStep('urgency')
+
+        setChatMessages(prev => [
+          ...prev,
+          {
+            role: 'user',
+            text: chatLocation,
+            time: new Date()
+          },
+          {
+            role: 'bot',
+            text: 'How urgent is this problem?',
+            time: new Date()
+          }
+        ])
+      }}
+    >
+      Send
+    </button>
+  </div>
+)}
+{chatStep === 'urgency' && (
+  <div className="chat-category-grid">
+    {[
+      ['High', '🔴', 'Needs immediate attention'],
+      ['Medium', '🟠', 'Should be addressed soon'],
+      ['Low', '🟢', 'Can be addressed routinely']
+    ].map(([level, icon, description]) => (
+      <button
+        key={level}
+        className="chat-category-button"
+        onClick={() => {
+          setChatUrgency(level)
+          setChatStep('photo')
+
+          setChatMessages(prev => [
+            ...prev,
+            {
+              role: 'user',
+              text: `${icon} ${level}`,
+              time: new Date()
+            },
+            {
+              role: 'bot',
+              text: 'Would you like to add a photo of the problem?',
+              time: new Date()
+            }
+          ])
+        }}
+      >
+        <span className="chat-category-icon">{icon}</span>
+        <span>
+          <strong>{level}</strong>
+          <br />
+          <small>{description}</small>
+        </span>
+      </button>
+    ))}
+  </div>
+)}
+{chatStep === 'photo' && (
+  <div className="chat-category-grid">
+    <button
+      className="chat-category-button"
+      onClick={() => {
+        document.getElementById('problem-image')?.click()
+      }}
+    >
+      <span className="chat-category-icon">📷</span>
+      <span>Add a Photo</span>
+    </button>
+
+    <button
+      className="chat-category-button"
+      onClick={() => {
+        setChatStep('review')
+
+        setChatMessages(prev => [
+          ...prev,
+          {
+            role: 'user',
+            text: 'No photo',
+            time: new Date()
+          },
+          {
+            role: 'bot',
+            text: 'No problem. Please review your report below.',
+            time: new Date()
+          }
+        ])
+      }}
+    >
+      <span className="chat-category-icon">➡️</span>
+      <span>Continue Without Photo</span>
+    </button>
+  </div>
+)}
+{chatStep === 'review' && (
+  <div className="chat-review-card">
+    <h3>📋 Review Your Report</h3>
+
+    <div className="chat-review-item">
+      <strong>Category</strong>
+      <span>
+        {SECTOR_META[chatCategory]?.icon} {SECTOR_META[chatCategory]?.name}
+      </span>
+    </div>
+
+    <div className="chat-review-item">
+      <strong>Problem</strong>
+      <span>{chatDescription}</span>
+    </div>
+
+    <div className="chat-review-item">
+      <strong>Location</strong>
+      <span>📍 {chatLocation}</span>
+    </div>
+
+    <div className="chat-review-item">
+      <strong>Urgency</strong>
+      <span>🚨 {chatUrgency}</span>
+    </div>
+
+    <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+      <button
+        className="btn btn-primary"
+        onClick={() => {
+  const reportText =
+    `${SECTOR_META[chatCategory]?.name}: ${chatDescription}. ` +
+    `Location: ${chatLocation}. Urgency: ${chatUrgency}.`
+
+  handleConfirmSubmit(
+    {
+      corrCategory: chatCategory,
+      corrDistrict: chatLocation,
+      corrUrgency: chatUrgency
+    },
+    reportText
+  )
+}}
+          
+      >
+        ✅ Submit Report
+      </button>
+
+      <button
+        className="btn btn-ghost"
+        onClick={() => {
+  setChatStep('category')
+  setChatCategory(null)
+  setChatDescription('')
+  setChatLocation('')
+  setChatUrgency(null)
+  setImageData(null)
+  setImageFile(null)
+  setImagePreview('')
+  setChatMessages([
+    {
+      role: 'bot',
+      text: '🙏 Namaste! I am the CitizenConnect assistant. What problem would you like to report? Please choose a category below. (यहाँ हिन्दी में भी लिख सकते हैं / ಕನ್ನಡದಲ್ಲಿ ಬರೆಯಿರಿ)',
+      time: new Date()
+    }
+  ])
+}}
+      >
+        ↩️ Start Over
+      </button>
+    </div>
+  </div>
+)}
+                              </div>
+                            </>
+                          )}
+                        </div>
+
+        {/* Extraction Preview */}
+        {extraction && (
+          <ExtractionPreview
+            data={extraction}
+            langCode={selectedLang}
+            onConfirm={handleConfirmSubmit}
+            onCorrect={(corr) => {
+              toast('Correction logged. Submitting corrected request…', 'info')
+              handleConfirmSubmit(corr)
+            }}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
