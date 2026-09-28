@@ -142,6 +142,9 @@ export default function CitizenInputPage() {
   const [chatDescription, setChatDescription] = useState('')
   const [chatLocation, setChatLocation] = useState('')
   const [chatUrgency, setChatUrgency] = useState(null)
+  const [userLocation, setUserLocation] = useState(null)
+  const [locationStatus, setLocationStatus] = useState('idle')
+  const [detectedArea, setDetectedArea] = useState('')
   const [chatMessages, setChatMessages] = useState([
     { role: 'bot', text: '🙏 Namaste! I am the CitizenConnect assistant. What problem would you like to report? Please choose a category below. (यहाँ हिन्दी में भी लिख सकते हैं / ಕನ್ನಡದಲ್ಲಿ ಬರೆಯಿರಿ)', time: new Date() }
   ])
@@ -437,6 +440,97 @@ export default function CitizenInputPage() {
                       </div>
 
                       <div className="chat-category-grid">
+                        <button
+  className="chat-category-button"
+  onClick={() => {
+    setLocationStatus('requesting')
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+  const latitude = position.coords.latitude
+  const longitude = position.coords.longitude
+
+  setUserLocation({
+    latitude,
+    longitude
+  })
+
+  fetch(
+    `http://127.0.0.1:8000/api/location/reverse?latitude=${latitude}&longitude=${longitude}`
+  )
+    .then(response => response.json())
+    .then(data => {
+      setDetectedArea(data.area || '')
+      setLocationStatus('success')
+    })
+    .catch(() => {
+      setLocationStatus('success')
+    })
+},
+      () => {
+        setLocationStatus('denied')
+      }
+    )
+  }}
+>
+
+  <span className="chat-category-icon">📍</span>
+  <span>Allow Location Access</span>
+</button>
+{locationStatus === 'requesting' && (
+  <div style={{ marginTop: 10, fontSize: 13, color: 'var(--text-secondary)' }}>
+    📍 Getting your location...
+  </div>
+)}
+
+{locationStatus === 'success' && userLocation && (
+  <div style={{ marginTop: 10, fontSize: 13, color: 'var(--text-secondary)' }}>
+    {detectedArea ? (
+      <>
+        <div>📍 We think you're near <strong>{detectedArea}</strong>.</div>
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button
+            className="btn btn-primary"
+           onClick={() => {
+  setChatLocation(detectedArea)
+  setChatMessages(prev => [
+    ...prev,
+    {
+      role: 'user',
+      text: `📍 Location: ${detectedArea}`,
+      time: new Date()
+    },
+    {
+      role: 'bot',
+      text: `Great! I'll use ${detectedArea} as the suggested location. Now, what problem would you like to report?`,
+      time: new Date()
+    }
+  ])
+}}
+          >
+            Use This Location
+          </button>
+
+          <button
+            className="btn btn-ghost"
+            onClick={() => setChatStep('location')}
+          >
+            Enter Different Location
+          </button>
+        </div>
+      </>
+    ) : (
+      '✅ Location detected successfully'
+    )}
+  </div>
+)}
+
+{locationStatus === 'denied' && (
+  <div style={{ marginTop: 10, fontSize: 13, color: 'var(--text-secondary)' }}>
+    ⚠️ Location access was not allowed. You can enter the location manually.
+  </div>
+)}
                         {Object.entries(SECTOR_META).map(([key, sector]) => (
                           <button
                             key={key}

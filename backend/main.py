@@ -553,3 +553,44 @@ def receive_channel_webhook(channel_name: str, payload: Dict[str, Any] = Body(..
 @app.get("/api/health", tags=["System"])
 def health():
     return {"status": "ok", "platform": settings.PROJECT_NAME, "version": settings.VERSION, "data_disclaimer": "All datasets are synthetic demo data."}
+@app.get("/api/location/reverse")
+def reverse_location(latitude: float, longitude: float):
+    import json
+    from urllib.parse import urlencode
+    from urllib.request import Request, urlopen
+
+    params = urlencode({
+        "lat": latitude,
+        "lon": longitude,
+        "format": "json",
+        "zoom": 18,
+        "addressdetails": 1
+    })
+
+    request = Request(
+        f"https://nominatim.openstreetmap.org/reverse?{params}",
+        headers={
+            "User-Agent": "CitizenDevelopmentIntelligencePlatform/1.0"
+        }
+    )
+
+    with urlopen(request, timeout=10) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    address = data.get("address", {})
+
+    area = (
+        address.get("village")
+        or address.get("town")
+        or address.get("city")
+        or address.get("municipality")
+        or address.get("county")
+        or ""
+    )
+
+    return {
+        "area": area,
+        "display_name": data.get("display_name", ""),
+        "state": address.get("state", ""),
+        "district": address.get("state_district", "")
+    }
